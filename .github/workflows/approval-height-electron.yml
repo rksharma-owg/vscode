@@ -38,6 +38,9 @@ jobs:
           npm ci --prefix build --ignore-scripts --no-audit --no-fund
           npm run transpile-client
           npm run electron
+      - name: Build macOS copyfile dependency
+        if: runner.os == 'macOS'
+        run: npm rebuild @vscode/fs-copyfile
       - name: Install Linux display dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libgbm1 libasound2
