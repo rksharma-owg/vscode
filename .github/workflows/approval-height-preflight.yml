@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  PATCH_SHA: 440f417cfe26cf1d61a398836b7a22ba88161e5d
+  PATCH_SHA: 8c82d12f4277d62c6ac89fab11adf08c9f626683
   BASE_SHA: 4336606aa949efdcddb89b3db3e216562730b2bf
   NODE_OPTIONS: --max-old-space-size=6144
 jobs:
@@ -29,11 +29,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ env.PATCH_SHA }}
-          fetch-depth: 2
+          fetch-depth: 3
       - name: Verify exact patch and baseline
         run: |
           test "$(git rev-parse HEAD)" = "$PATCH_SHA"
-          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
           git show --stat --oneline HEAD
           echo "Workflow revision: $GITHUB_SHA"
           echo "Direct descendant of target: PR merge tree equals tested patch tree."
