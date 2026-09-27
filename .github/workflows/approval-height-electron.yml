@@ -1,0 +1,58 @@
+name: Approval height Electron preflight
+on:
+  push:
+    branches: [codex/vscode-338189-electron]
+permissions:
+  contents: read
+env:
+  PATCH_SHA: 440f417cfe26cf1d61a398836b7a22ba88161e5d
+  BASE_SHA: 4336606aa949efdcddb89b3db3e216562730b2bf
+  VSCODE_SKIP_PRELAUNCH: '1'
+jobs:
+  electron:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.PATCH_SHA }}
+          fetch-depth: 2
+      - name: Verify exact patch and baseline
+        run: |
+          test "$(git rev-parse HEAD)" = "$PATCH_SHA"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          echo "Tested $PATCH_SHA; baseline $BASE_SHA; workflow $GITHUB_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - name: Install tooling and Electron
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix build --ignore-scripts --no-audit --no-fund
+          npm run transpile-client
+          npm run electron
+      - name: Install Linux display dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libgbm1 libasound2
+      - name: Sessions Electron suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./scripts/test.sh --run src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts --tfs SessionsElectron
+      - name: Sessions Electron suite (macOS)
+        if: runner.os == 'macOS'
+        run: ./scripts/test.sh --run src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts --tfs SessionsElectron
+      - name: Sessions Electron suite (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: scripts\test.bat --run src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts --tfs SessionsElectron
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: electron-results-${{ matrix.os }}
+          path: test-results/
