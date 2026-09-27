@@ -1,0 +1,133 @@
+name: Approval height preflight
+on:
+  push:
+    branches: [codex/vscode-338189-preflight]
+permissions:
+  contents: read
+env:
+  PATCH_SHA: 440f417cfe26cf1d61a398836b7a22ba88161e5d
+  BASE_SHA: 4336606aa949efdcddb89b3db3e216562730b2bf
+  NODE_OPTIONS: --max-old-space-size=6144
+jobs:
+  validation:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            browser: chromium
+          - os: windows-2022
+            browser: firefox
+          - os: macos-15
+            browser: webkit
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.PATCH_SHA }}
+          fetch-depth: 2
+      - name: Verify exact patch and baseline
+        run: |
+          test "$(git rev-parse HEAD)" = "$PATCH_SHA"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git show --stat --oneline HEAD
+          echo "Workflow revision: $GITHUB_SHA"
+          echo "Direct descendant of target: PR merge tree equals tested patch tree."
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - name: Install browser and validation dependencies
+        run: |
+          node --version
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix build --ignore-scripts --no-audit --no-fund
+          node build/npm/electronTypes.ts
+          npm exec -- playwright install --with-deps ${{ matrix.browser }}
+      - name: Static validation
+        run: |
+          npm run typecheck-client
+          node build/hygiene.ts src/vs/sessions/contrib/sessions/browser/media/sessionsList.css src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts
+          npm run eslint -- src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts
+          npm run stylelint -- src/vs/sessions/contrib/sessions/browser/media/sessionsList.css
+          npm run valid-layers-check
+          git diff --check HEAD^
+      - name: Compile client and run Sessions browser suite
+        run: |
+          npm run transpile-client
+          npm run test-browser-no-install -- --browser ${{ matrix.browser }} --run src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts --tfs Sessions
+      - name: Verify untouched baseline suite
+        run: |
+          git show "$BASE_SHA:src/vs/sessions/contrib/sessions/browser/media/sessionsList.css" > src/vs/sessions/contrib/sessions/browser/media/sessionsList.css
+          git show "$BASE_SHA:src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts" > src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts
+          npm run transpile-client
+          npm run test-browser-no-install -- --browser ${{ matrix.browser }} --run src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts --tfs BaselineSessions
+          git restore src/vs/sessions/contrib/sessions/browser/media/sessionsList.css src/vs/sessions/contrib/sessions/test/browser/sessionsList.test.ts
+          git diff --exit-code
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: unit-results-${{ matrix.os }}
+          path: test-results/
+  fixtures:
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [patch, baseline]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ matrix.revision == 'patch' && env.PATCH_SHA || env.BASE_SHA }}
+      - name: Verify tested revision
+        env:
+          EXPECTED_SHA: ${{ matrix.revision == 'patch' && env.PATCH_SHA || env.BASE_SHA }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "Tested SHA: $EXPECTED_SHA; workflow revision: $GITHUB_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - name: Install fixture tooling
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix build --ignore-scripts --no-audit --no-fund
+          npm ci --prefix build/rspack --no-audit --no-fund
+          npm ci --prefix test/componentFixtures/playwright --no-audit --no-fund
+          cp node_modules/@vscode/codicons/dist/codicon.ttf src/vs/base/browser/ui/codicons/codicon/codicon.ttf
+          npm exec -- playwright install --with-deps chromium
+          cd test/componentFixtures/playwright
+          npm exec -- playwright install --with-deps chromium
+      - name: Build component explorer
+        working-directory: build/rspack
+        env:
+          COMPONENT_EXPLORER_STATIC_BUILD: '1'
+        run: npx rspack build --config rspack.serve-out.config.mts
+      - name: Sessions fixture interaction tests
+        working-directory: test/componentFixtures/playwright
+        run: npx playwright test sessionsListTwistie.spec.ts
+      - name: Render Sessions screenshots
+        run: ./node_modules/.bin/component-explorer render --project ./test/componentFixtures/component-explorer.json --fixture-id-regex '^sessions/sessionsList/'
+      - name: Require fixture success
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const manifest=JSON.parse(fs.readFileSync('test/componentFixtures/.screenshots/current/manifest.json','utf8'));
+          assert.ok(manifest.fixtures.length > 0, 'No fixtures rendered');
+          const errors=manifest.fixtures.filter(f=>f.hasError);
+          console.log('Fixtures:',manifest.fixtures.length,'Errors:',JSON.stringify(errors));
+          assert.equal(errors.length,0);
+          JS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: fixtures-${{ matrix.revision }}
+          include-hidden-files: true
+          path: |
+            test/componentFixtures/.screenshots/current/
+            test/componentFixtures/playwright/test-results/
