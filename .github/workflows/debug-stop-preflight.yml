@@ -1,0 +1,132 @@
+name: Debug stop preflight
+on:
+  push:
+    branches: [codex/vscode-debug-preflight]
+permissions:
+  contents: read
+env:
+  PATCH_SHA: 7850f8fac1e91b5b6e45a04eecd15027dcb56a3b
+  BASE_SHA: 5983cda0c8126417e5a9cdf33d0be2f4000d3f04
+jobs:
+  debugger:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            browser: chromium
+          - os: windows-2022
+            browser: chromium
+          - os: macos-26
+            browser: webkit
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.PATCH_SHA }}
+          fetch-depth: 3
+      - name: Verify exact contribution and merge baseline
+        run: |
+          test "$(git rev-parse HEAD)" = "$PATCH_SHA"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          echo "Tested $PATCH_SHA; target $BASE_SHA; workflow $GITHUB_SHA"
+          git show --stat --oneline HEAD
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - name: Install locked validation dependencies
+        run: |
+          node --version
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix build --ignore-scripts --no-audit --no-fund
+          node build/npm/electronTypes.ts
+          npm exec -- playwright install --with-deps ${{ matrix.browser }}
+      - name: Validate source and changed paths
+        run: |
+          npm run typecheck-client
+          node build/hygiene.ts src/vs/workbench/contrib/debug/browser/debugSession.ts src/vs/workbench/contrib/debug/test/browser/debugSession.test.ts
+          npm run eslint -- src/vs/workbench/contrib/debug/browser/debugSession.ts src/vs/workbench/contrib/debug/test/browser/debugSession.test.ts
+          git diff --check HEAD^
+      - name: Transpile client and run debugger browser suites
+        run: |
+          npm run transpile-client
+          npm run test-browser-no-install -- --browser ${{ matrix.browser }} --runGlob '**/contrib/debug/test/**/*.test.js' --tfs DebuggerBrowser
+      - name: Install Electron
+        run: npm run electron
+      - name: Build macOS filesystem addon
+        if: runner.os == 'macOS'
+        run: npm rebuild @vscode/fs-copyfile
+      - name: Debugger Electron suites (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./scripts/test.sh --runGlob '**/contrib/debug/test/**/*.test.js' --tfs DebuggerElectron
+      - name: Debugger Electron suites (macOS)
+        if: runner.os == 'macOS'
+        run: ./scripts/test.sh --runGlob '**/contrib/debug/test/**/*.test.js' --tfs DebuggerElectron
+      - name: Debugger Electron suites (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: scripts\test.bat --runGlob **/contrib/debug/test/**/*.test.js --tfs DebuggerElectron
+      - name: Baseline debugger browser suites
+        run: |
+          git show "$BASE_SHA:src/vs/workbench/contrib/debug/browser/debugSession.ts" > src/vs/workbench/contrib/debug/browser/debugSession.ts
+          git show "$BASE_SHA:src/vs/workbench/contrib/debug/test/browser/debugSession.test.ts" > src/vs/workbench/contrib/debug/test/browser/debugSession.test.ts
+          npm run transpile-client
+          npm run test-browser-no-install -- --browser ${{ matrix.browser }} --runGlob '**/contrib/debug/test/**/*.test.js' --tfs BaselineDebugger
+          git restore src/vs/workbench/contrib/debug/browser/debugSession.ts src/vs/workbench/contrib/debug/test/browser/debugSession.test.ts
+          git diff --exit-code
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: debugger-results-${{ matrix.os }}
+          path: test-results/
+  source-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.PATCH_SHA }}
+          fetch-depth: 3
+      - name: Verify tested SHA
+        run: test "$(git rev-parse HEAD)" = "$PATCH_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - name: Install locked compiler tooling
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix build --ignore-scripts --no-audit --no-fund
+          node build/npm/electronTypes.ts
+      - name: Validate module layers
+        run: npm run valid-layers-check
+      - name: Validate class field initialization
+        run: npm run define-class-fields-check
+      - name: TypeScript security compiler
+        run: npm run tsec-compile-check
+  codeql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.PATCH_SHA }}
+      - name: Verify tested SHA
+        run: test "$(git rev-parse HEAD)" = "$PATCH_SHA"
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938
+        with:
+          category: /language:javascript-typescript
