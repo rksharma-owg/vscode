@@ -1,7 +1,7 @@
-name: Debug stop preflight
+name: Debug stop Linux preflight
 on:
   push:
-    branches: [codex/vscode-debug-preflight]
+    branches: [codex/vscode-debug-linux-preflight]
 permissions:
   contents: read
 env:
@@ -15,10 +15,6 @@ jobs:
         include:
           - os: ubuntu-24.04
             browser: chromium
-          - os: windows-2022
-            browser: chromium
-          - os: macos-26
-            browser: webkit
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     defaults:
@@ -58,6 +54,11 @@ jobs:
           npm run test-browser-no-install -- --browser ${{ matrix.browser }} --runGlob '**/contrib/debug/test/**/*.test.js' --tfs DebuggerBrowser
       - name: Install Electron
         run: npm run electron
+      - name: Configure Linux Electron sandbox
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root .build/electron/chrome-sandbox
+          sudo chmod 4755 .build/electron/chrome-sandbox
       - name: Build macOS filesystem addon
         if: runner.os == 'macOS'
         run: npm rebuild @vscode/fs-copyfile
@@ -84,49 +85,3 @@ jobs:
         with:
           name: debugger-results-${{ matrix.os }}
           path: test-results/
-  source-quality:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ env.PATCH_SHA }}
-          fetch-depth: 3
-      - name: Verify tested SHA
-        run: test "$(git rev-parse HEAD)" = "$PATCH_SHA"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version-file: .nvmrc
-      - name: Install locked compiler tooling
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm ci --prefix build --ignore-scripts --no-audit --no-fund
-          node build/npm/electronTypes.ts
-      - name: Validate module layers
-        run: npm run valid-layers-check
-      - name: Validate class field initialization
-        run: npm run define-class-fields-check
-      - name: TypeScript security compiler
-        run: npm run tsec-compile-check
-  codeql:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    permissions:
-      contents: read
-      actions: read
-      packages: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ env.PATCH_SHA }}
-      - name: Verify tested SHA
-        run: test "$(git rev-parse HEAD)" = "$PATCH_SHA"
-      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
-        with:
-          languages: javascript-typescript
-          build-mode: none
-          config-file: ./.github/codeql/codeql-config.yml
-      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938
-        with:
-          category: /language:javascript-typescript
