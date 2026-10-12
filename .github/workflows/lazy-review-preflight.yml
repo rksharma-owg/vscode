@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  BASE_SHA: 0817aaa824590067854c361e77eb973a08b3cf48
+  BASE_SHA: ff00e788322523ee1e9e8ee2c9bb4b89af93a3c2
 jobs:
   debugger:
     env:
@@ -17,17 +17,17 @@ jobs:
           - os: ubuntu-24.04
             browser: chromium
             patch: lazy
-            sha: 98f90be7879884d32ee43af3d69c710d29e3ca59
+            sha: 01912613f72a6ec6766d8a4b041be42d474b3d37
             scope: debug
           - os: windows-2022
             browser: chromium
             patch: lazy
-            sha: 98f90be7879884d32ee43af3d69c710d29e3ca59
+            sha: 01912613f72a6ec6766d8a4b041be42d474b3d37
             scope: debug
           - os: macos-26
             browser: webkit
             patch: lazy
-            sha: 98f90be7879884d32ee43af3d69c710d29e3ca59
+            sha: 01912613f72a6ec6766d8a4b041be42d474b3d37
             scope: debug
     name: ${{ matrix.patch }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -39,7 +39,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ env.PATCH_SHA }}
-          fetch-depth: 3
+          fetch-depth: 0
+          persist-credentials: false
       - name: Verify exact contribution and merge baseline
         run: |
           test "$(git rev-parse HEAD)" = "$PATCH_SHA"
@@ -60,7 +61,7 @@ jobs:
         run: |
           npm run typecheck-client
           changed=()
-          while IFS= read -r path; do changed+=("$path"); done < <(git diff --name-only "$BASE_SHA" "$PATCH_SHA")
+          while IFS= read -r -d '' path; do changed+=("$path"); done < <(git diff --name-only --no-renames -z "$BASE_SHA" "$PATCH_SHA")
           node build/hygiene.ts "${changed[@]}"
           npm run eslint -- "${changed[@]}"
           git diff --check "$BASE_SHA"
@@ -91,7 +92,6 @@ jobs:
       - name: Baseline browser suites
         run: |
           git checkout --detach "$BASE_SHA"
-          node -e "require('fs').rmSync('out/vs/workbench/contrib/tasks/test/browser/taskProblemMonitor.test.js', { force: true })"
           npm run transpile-client
           npm run test-browser-no-install -- --browser ${{ matrix.browser }} --runGlob '**/contrib/${{ matrix.scope }}/test/**/*.test.js' --tfs Baseline
           git checkout --detach "$PATCH_SHA"
@@ -109,7 +109,7 @@ jobs:
       matrix:
         include:
           - patch: lazy
-            sha: 98f90be7879884d32ee43af3d69c710d29e3ca59
+            sha: 01912613f72a6ec6766d8a4b041be42d474b3d37
     name: source-quality / ${{ matrix.patch }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -117,7 +117,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ env.PATCH_SHA }}
-          fetch-depth: 3
+          fetch-depth: 0
+          persist-credentials: false
       - name: Verify tested SHA
         run: test "$(git rev-parse HEAD)" = "$PATCH_SHA"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -142,7 +143,7 @@ jobs:
       matrix:
         include:
           - patch: lazy
-            sha: 98f90be7879884d32ee43af3d69c710d29e3ca59
+            sha: 01912613f72a6ec6766d8a4b041be42d474b3d37
     name: codeql / ${{ matrix.patch }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -155,6 +156,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ env.PATCH_SHA }}
+          persist-credentials: false
       - name: Verify tested SHA
         run: test "$(git rev-parse HEAD)" = "$PATCH_SHA"
       - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
